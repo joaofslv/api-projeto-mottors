@@ -16,3 +16,11 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+export const refreshSchema = z.object({
+  refresh_token: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/, "Refresh token inválido"),
+});
+
+export type RefreshInput = z.infer<typeof refreshSchema>;

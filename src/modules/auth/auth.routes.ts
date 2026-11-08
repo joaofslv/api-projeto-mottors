@@ -1,8 +1,9 @@
 import { authenticate } from "../../shared/middlewares/authenticate";
 import { Router } from "express";
 import { successResponse } from "../../shared/http/response";
-import { loginSchema, registerSchema } from "./auth.schemas";
-import { loginUser, registerUser } from "./auth.service";
+import { loginSchema, refreshSchema, registerSchema } from "./auth.schemas";
+import { loginUser,logoutSession, refreshSession, registerUser } from "./auth.service";
+
 
 export const authRoutes = Router();
 
@@ -20,4 +21,22 @@ authRoutes.post("/login", async (req, res) => {
 
 authRoutes.get("/me", authenticate, (_req, res) => {
   res.json(successResponse(res.locals.user));
+});
+
+authRoutes.post("/refresh", async (req, res) => {
+  const input = refreshSchema.parse(req.body);
+  const tokens = await refreshSession(input);
+
+  res.json(successResponse(tokens));
+});
+
+authRoutes.post("/logout", authenticate, async (_req, res) => {
+  await logoutSession(
+    res.locals.sessionId,
+    res.locals.user.id,
+  );
+
+  res.json(successResponse({
+    message: "Sessão encerrada",
+  }));
 });
