@@ -5,11 +5,14 @@ import express from "express";
 import { errorHandler } from "./shared/middlewares/errorHandler";
 import { notFound } from "./shared/middlewares/notFound";
 import { successResponse } from "./shared/http/response";
+import { rbacRoutes } from "./modules/rbac/rbac.routes";
 
 export const app = express();
 
+
 app.use(express.json());
 app.use("/auth", authRoutes);
+app.use(rbacRoutes);
 
 app.get("/health", async (_req, res) => {
   try {

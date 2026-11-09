@@ -31,10 +31,34 @@ test('autenticação e sessões HTTP (banco simulado)', async (t) => {
   let updates = 0;
   const sessions = new Map();
 
+  const assignments = [];
+
+function grantPermission({
+  userId = user.id,
+  active = true,
+  deletedAt = null,
+  permission = 'users.view',
+} = {}) {
+  const assignment = {
+    userId,
+    role: {
+      active,
+      deletedAt,
+      permissions: [permission],
+    },
+  };
+
+  assignments.push(assignment);
+  return assignment;
+}
+
   const originals = {
+    roleFindMany: prisma.role.findMany,
+    permissionFindMany: prisma.permission.findMany,
     transaction: prisma.$transaction,
     userFindUnique: prisma.user.findUnique,
     userUpdate: prisma.user.update,
+    userRoleFindFirst: prisma.userRole.findFirst,
     sessionCreate: prisma.session.create,
     sessionFindUnique: prisma.session.findUnique,
     sessionFindFirst: prisma.session.findFirst,
@@ -165,6 +189,76 @@ test('autenticação e sessões HTTP (banco simulado)', async (t) => {
 
     return { count };
   };
+prisma.userRole.findFirst = async ({ where }) => {
+  const assignment = assignments.find((item) => {
+    if (
+      where.userId !== undefined &&
+      item.userId !== where.userId
+    ) {
+      return false;
+    }
+
+    const roleFilter = where.role;
+
+    if (
+      roleFilter?.active !== undefined &&
+      item.role.active !== roleFilter.active
+    ) {
+      return false;
+    }
+
+    if (
+      roleFilter?.deletedAt === null &&
+      item.role.deletedAt !== null
+    ) {
+      return false;
+    }
+
+    const permissionName =
+      roleFilter?.permissions?.some?.permission?.name;
+
+    if (
+      permissionName !== undefined &&
+      !item.role.permissions.includes(permissionName)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return assignment
+    ? { userId: assignment.userId }
+    : null;
+};
+
+  const listedPermission = {
+    id: 'permission-test',
+    name: 'roles.manage',
+    resource: 'roles',
+    action: 'manage',
+  };
+
+  prisma.role.findMany = async () => [
+    {
+      id: 'role-test',
+      name: 'SUPER_ADMIN',
+      description: 'Super Administrador',
+      active: true,
+      permissions: [
+        {
+          permission: {
+            id: listedPermission.id,
+            name: listedPermission.name,
+          },
+        },
+      ],
+    },
+  ];
+
+  prisma.permission.findMany = async () => [
+    { ...listedPermission },
+  ];
 
   // Simula as duas formas de chamada usadas pelo serviço.
   // Não reproduz o isolamento e o rollback reais do PostgreSQL.
@@ -250,6 +344,7 @@ test('autenticação e sessões HTTP (banco simulado)', async (t) => {
       await t.test(name, async () => {
         currentUser = { ...user };
         sessions.clear();
+        assignments.length = 0;
         updates = 0;
         await run();
       });
@@ -509,7 +604,158 @@ test('autenticação e sessões HTTP (banco simulado)', async (t) => {
         200,
       );
     });
+    await scenario('RBAC sem autenticação retorna 401', async () => {
+  const response = await request('/auth/permission-check');
+
+  assert.equal(response.status, 401);
+});
+
+await scenario('RBAC sem perfil retorna 403', async () => {
+  const tokens = await newLogin();
+
+  const response = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(response.status, 403);
+});
+
+await scenario('RBAC com permissão retorna 200', async () => {
+  grantPermission();
+
+  const tokens = await newLogin();
+
+  const response = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+});
+
+await scenario('RBAC ignora perfil desativado ou removido', async () => {
+  const tokens = await newLogin();
+
+  for (const options of [
+    { active: false },
+    { deletedAt: new Date() },
+  ]) {
+    assignments.length = 0;
+    grantPermission(options);
+
+    const response = await request('/auth/permission-check', {
+      token: tokens.access_token,
+    });
+
+    assert.equal(response.status, 403);
+  }
+});
+
+await scenario('RBAC exige a permissão específica', async () => {
+  grantPermission({ permission: 'billing.view' });
+
+  const tokens = await newLogin();
+
+  const response = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(response.status, 403);
+});
+
+await scenario('RBAC não usa o perfil de outro usuário', async () => {
+  grantPermission({ userId: 'outro-usuario' });
+
+  const tokens = await newLogin();
+
+  const response = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(response.status, 403);
+});
+
+await scenario('RBAC reflete a retirada de permissão sem novo login', async () => {
+  const assignment = grantPermission();
+  const tokens = await newLogin();
+
+  const before = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(before.status, 200);
+
+  assignment.role.permissions.length = 0;
+
+  const after = await request('/auth/permission-check', {
+    token: tokens.access_token,
+  });
+
+  assert.equal(after.status, 403);
+});
+    for (const path of ['/roles', '/permissions']) {
+      await scenario(`${path}: sem token retorna 401`, async () => {
+        const response = await request(path);
+        assert.equal(response.status, 401);
+      });
+
+      await scenario(`${path}: sem permissão retorna 403`, async () => {
+        const tokens = await newLogin();
+        const response = await request(path, {
+          token: tokens.access_token,
+        });
+        assert.equal(response.status, 403);
+      });
+
+      await scenario(`${path}: users.view não permite acesso`, async () => {
+        grantPermission({ permission: 'users.view' });
+        const tokens = await newLogin();
+        const response = await request(path, {
+          token: tokens.access_token,
+        });
+        assert.equal(response.status, 403);
+      });
+
+      await scenario(`${path}: roles.manage permite listar`, async () => {
+        grantPermission({ permission: 'roles.manage' });
+        const tokens = await newLogin();
+        const response = await request(path, {
+          token: tokens.access_token,
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(response.body.success, true);
+
+        if (path === '/roles') {
+          assert.deepEqual(response.body.data, [
+            {
+              id: 'role-test',
+              name: 'SUPER_ADMIN',
+              description: 'Super Administrador',
+              active: true,
+              permissions: [
+                {
+                  id: 'permission-test',
+                  name: 'roles.manage',
+                },
+              ],
+            },
+          ]);
+        } else {
+          assert.deepEqual(response.body.data, [
+            {
+              id: 'permission-test',
+              name: 'roles.manage',
+              resource: 'roles',
+              action: 'manage',
+            },
+          ]);
+        }
+      });
+    }
   } finally {
+    prisma.role.findMany = originals.roleFindMany;
+    prisma.permission.findMany = originals.permissionFindMany;
     prisma.$transaction = originals.transaction;
     prisma.user.findUnique = originals.userFindUnique;
     prisma.user.update = originals.userUpdate;
@@ -517,6 +763,7 @@ test('autenticação e sessões HTTP (banco simulado)', async (t) => {
     prisma.session.findUnique = originals.sessionFindUnique;
     prisma.session.findFirst = originals.sessionFindFirst;
     prisma.session.updateMany = originals.sessionUpdateMany;
+    prisma.userRole.findFirst = originals.userRoleFindFirst;
 
     if (server?.listening) {
       server.closeAllConnections();

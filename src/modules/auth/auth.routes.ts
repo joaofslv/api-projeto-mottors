@@ -3,7 +3,7 @@ import { Router } from "express";
 import { successResponse } from "../../shared/http/response";
 import { loginSchema, refreshSchema, registerSchema } from "./auth.schemas";
 import { loginUser,logoutSession, refreshSession, registerUser } from "./auth.service";
-
+import { requirePermission } from "../../shared/middlewares/requirePermission";
 
 export const authRoutes = Router();
 
@@ -40,3 +40,15 @@ authRoutes.post("/logout", authenticate, async (_req, res) => {
     message: "Sessão encerrada",
   }));
 });
+authRoutes.get(
+  "/permission-check",
+  authenticate,
+  requirePermission("users.view"),
+  (_req, res) => {
+    res.json(
+      successResponse({
+        message: "Você possui a permissão users.view",
+      }),
+    );
+  },
+);

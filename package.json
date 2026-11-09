@@ -8,6 +8,9 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc --noEmit"
   },
+   "prisma": {
+      "seed": "tsx prisma/seed.ts"
+    },
   "keywords": [],
   "type": "commonjs",
   "dependencies": {
